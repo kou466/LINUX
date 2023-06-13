@@ -492,7 +492,7 @@ int main(int argc, char *argv[]) {
 }
 ```
 
-- mv : ./mv [source] [target]: source를 target으로 이동하거나 이름을 변경함
+- mv : ./mv [source] [target]: source를 target으로 이름을 변경함
 
 ```c
 #include <stdio.h>
@@ -504,11 +504,11 @@ int main(int argc, char *argv[]) {
     }
 
     if (rename(argv[1], argv[2]) != 0) {
-        printf("이동 또는 이름을 변경할 수 없습니다.\n");
+        printf("이름을 변경할 수 없습니다.\n");
         return 1;
     }
 
-    printf("이동되거나 이름이 변경되었습니다.\n");
+    printf("이름이 변경되었습니다.\n");
 
     return 0;
 }
