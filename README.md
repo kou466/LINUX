@@ -44,31 +44,59 @@ int main(int argc, char *argv[]) {
 }
 ```
 
-- chmod : ./chmod [File or Directory] [mode] : 파일 또는 디렉토리의 모드를 변환함
+- chmod : ./chmod [mode] [file] : 파일의 모드를 변환함
+  - 각 옵션에 대한 설명
+    - ./chmod -v : 실행 과정을 자세하게 보여준다.
 
 ```c
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
+#include <unistd.h>
 #include <sys/stat.h>
 
-int main(int argc, char *argv[]) {
-    if (argc != 3) {
-        printf("사용법: %s <파일 또는 디렉토리> <모드>\n", argv[0]);
+int main(int argc, char *argv[])
+{
+    int opt;
+    mode_t mode;
+    bool verbose = false;
+
+    while ((opt = getopt(argc, argv, "v")) != -1)
+    {
+        switch (opt)
+        {
+        case 'v':
+            verbose = true;
+            break;
+        default:
+            fprintf(stderr, "사용법: %s [-v] <모드> <파일>\n", argv[0]);
+            return 1;
+        }
+    }
+
+    if (argc - optind < 2)
+    {
+        fprintf(stderr, "사용법: %s [-v] <모드> <파일>\n", argv[0]);
         return 1;
     }
 
-    const char *path = argv[1];
-    int mode = strtol(argv[2], NULL, 8);
+    mode = strtol(argv[optind], NULL, 8);
+    char *path = argv[optind + 1];
 
-    if (chmod(path, mode) == 0) {
-        printf("성공적으로 모드를 변경했습니다: %s\n", argv[1]);
-    } else {
-        printf("모드 변경 실패: %s\n", argv[1]);
+    if (chmod(path, mode) == -1)
+    {
+        perror("chmod");
         return 1;
+    }
+
+    if (verbose)
+    {
+        printf("'%s' 파일의 접근 권한이 %03o 으로 변경되었습니다.\n", path, mode);
     }
 
     return 0;
 }
+
 ```
 
 - clear : ./clear : 현재 화면을 지움
@@ -83,161 +111,96 @@ int main() {
 }
 ```
 
-- cp : ./cp [-a] [-i] [-r] [-u] [-v] source target: source 파일을 target파일로 복사함
-  - 각 옵션에 대한 설명
-    - ./cp -a : 원본 파일의 속성, 링크 정보까지 복사
-    - ./cp -i : 파일이 존재할 경우, 덮어쓰기 할지 물어봄
-    - ./cp -r : 하위 디렉토리 및 파일까지 복사
-    - ./cp -u : 원본 파일이 복사본 파일보다 최신이거나 파일 및 디렉토리가 없을 경우 복사
-    - ./cp -v : 복사 진행 상태를 출력
+- cmp : ./cmp [file1] [file2] : file1과 file2를 비교하여 어떤 부분이 다른지 확인 가능
 
 ```c
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <errno.h>
-#include <string.h>
-#include <dirent.h>
+#include <stdbool.h>
 
-#define BUF_SIZE 4096
-
-void copy_file(const char *src, const char *dst, int flags[], mode_t mode);
-void copy_directory(const char *src, const char *dst, int flags[], mode_t mode);
-void copy_items(const char* src, const char* dst, int flags[]);
-
-int main(int argc, char *argv[]) {
-    int opt;
-    int flags[] = {0, 0, 0, 0};  // a, i, r, u, v
-
-    while ((opt = getopt(argc, argv, "airuv")) != -1) {
-        switch (opt) {
-            case 'a':
-                flags[0] = 1;
-                break;
-            case 'i':
-                flags[1] = 1;
-                break;
-            case 'r':
-                flags[2] = 1;
-                break;
-            case 'u':
-                flags[3] = 1;
-                break;
-            case 'v':
-                flags[4] = 1;
-                break;
-            default:
-                fprintf(stderr, "Usage: %s [-a] [-i] [-r] [-u] [-v] source target\n", argv[0]);
-                return 1;
-        }
-    }
-
-    if (optind + 2 != argc) {
-        fprintf(stderr, "파일을 찾을 수 없습니다.\n");
+int main(int argc, char *argv[])
+{
+    if (argc != 3)
+    {
+        fprintf(stderr, "사용법: %s [파일1] [파일2]\n", argv[0]);
         return 1;
     }
 
-    copy_items(argv[optind], argv[optind + 1], flags);
+    FILE *fp1, *fp2;
+    fp1 = fopen(argv[1], "rb");
+    fp2 = fopen(argv[2], "rb");
 
-    return 0;
-}
-
-void copy_items(const char* src, const char* dst, int flags[]) {
-    struct stat src_stat;
-
-    if (stat(src, &src_stat) == -1) {
-        perror("stat");
-        return;
+    if (!fp1 || !fp2)
+    {
+        perror("fopen");
+        return 1;
     }
 
-    if (S_ISDIR(src_stat.st_mode) && flags[2]) {
-        copy_directory(src, dst, flags, src_stat.st_mode);
-    } else if (S_ISREG(src_stat.st_mode)) {
-        copy_file(src, dst, flags, src_stat.st_mode);
-    } else {
-        fprintf(stderr, "파일 경로가 틀리거나, 파일 타입을 지원하지 않습니다.\n");
-    }
-}
+    int byte_pos = 0;
+    bool files_match = true;
+    while (true)
+    {
+        int char1 = fgetc(fp1);
+        int char2 = fgetc(fp2);
 
-void copy_file(const char *src, const char *dst, int flags[], mode_t mode) {
-    int src_fd, dst_fd;
-    char buffer[BUF_SIZE];
-    struct stat dst_stat;
+        byte_pos++;
 
-    src_fd = open(src, O_RDONLY);
-    if (src_fd < 0) {
-        perror("open src");
-        return;
-    }
-
-    // Check options
-    if (flags[3] && access(dst, F_OK) == 0) {
-        if (stat(dst, &dst_stat) == 0) {
-            if (dst_stat.st_mtime >= mode) {
-                return;
-            }
+        if (char1 == EOF && char2 == EOF)
+        {
+            break;
         }
-    }
 
-    if (flags[1] && access(dst, F_OK) == 0) {
-        char overwrite;
-        printf("overwrite %s? (y/n) ", dst);
-        scanf("%c", &overwrite);
-        if (overwrite != 'y') {
-            return;
-        }
-    }
-
-    dst_fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, mode);
-    if (dst_fd < 0) {
-        perror("open dst");
-        return;
-    }
-
-    ssize_t size;
-    while ((size = read(src_fd, buffer, BUF_SIZE)) > 0) {
-        if (write(dst_fd, buffer, size) != size) {
-            fprintf(stderr, "%s 파일을 작성할 수 없습니다. \n", dst);
+        if (char1 != char2)
+        {
+            files_match = false;
+            printf("%s %s differ: byte %d\n", argv[1], argv[2], byte_pos);
             break;
         }
     }
 
-    if (size < 0) {
-        fprintf(stderr, "%s 파일을 읽을 수 없습니다.\n", src);
-    }
+    fclose(fp1);
+    fclose(fp2);
 
-    close(src_fd);
-    close(dst_fd);
+    if (files_match)
+    {
+        return 0;
+    }
+    else
+    {
+        return 1;
+    }
 }
 
-void copy_directory(const char *src, const char *dst, int flags[], mode_t mode) {
-    DIR *dir;
-    dir = opendir(src);
-    if (!dir) {
-        perror("opendir");
-        return;
-    }
+```
 
-    if (mkdir(dst, mode) == -1 && errno != EEXIST) {
-        perror("mkdir");
-        return;
-    }
+- cp : ./cp source target: source 파일을 target파일로 복사함
 
-    char src_path[PATH_MAX], dst_path[PATH_MAX];
-    struct dirent *entry;
-    while ((entry = readdir(dir))) {
-        if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
-            snprintf(src_path, sizeof(src_path), "%s/%s", src, entry->d_name);
-            snprintf(dst_path, sizeof(dst_path), "%s/%s", dst, entry->d_name);
-            copy_items(src_path, dst_path, flags);
-        }
-    }
+```c
+#include <stdio.h>
 
-    closedir(dir);
+int main(int argc, char *argv[])
+{
+    char c;
+    FILE *fp1, *fp2;
+    if (argc != 3)
+    {
+        fprintf(stderr, "사용법: %s 파일1 파일2\n", argv[0]);
+        return 1;
+    }
+    fp1 = fopen(argv[1], "r");
+    if (fp1 == NULL)
+    {
+        fprintf(stderr, "파일 %s 열기 오류\n", argv[1]);
+        return 2;
+    }
+    fp2 = fopen(argv[2], "w");
+    while ((c = fgetc(fp1)) != EOF)
+        fputc(c, fp2);
+    fclose(fp1);
+    fclose(fp2);
+    return 0;
 }
+
 ```
 
 - date : ./date : 현재 날짜와 시간을 표시
@@ -470,26 +433,56 @@ void display_info(const char *path, const struct dirent *entry, bool h_flag)
 ```
 
 - mkdir : ./mkdir [디렉토리] : 작성한 디렉토리 이름으로 디렉토리 생성
+  - 각 옵션에 대한 설명
+    - ./mkdir -v : 실행 과정을 자세하게 보여준다.
 
 ```c
 #include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <unistd.h>
 #include <sys/stat.h>
 
-int main(int argc, char *argv[]) {
-    if (argc != 2) {
-        printf("사용법: %s <디렉토리>\n", argv[0]);
+int main(int argc, char *argv[])
+{
+    int opt;
+    bool verbose = false;
+
+    while ((opt = getopt(argc, argv, "v")) != -1)
+    {
+        switch (opt)
+        {
+        case 'v':
+            verbose = true;
+            break;
+        default:
+            fprintf(stderr, "사용법: %s [-v] <디렉토리 이름>\n", argv[0]);
+            return 1;
+        }
+    }
+
+    if (argc - optind < 1)
+    {
+        fprintf(stderr, "사용법: %s [-v] <디렉토리 이름>\n", argv[0]);
         return 1;
     }
 
-    if (mkdir(argv[1], 0777) == -1) {
-        printf("디렉토리를 생성할 수 없습니다.\n");
+    char *path = argv[optind];
+
+    if (mkdir(path, 0755) == -1)
+    {
+        perror("mkdir");
         return 1;
     }
 
-    printf("디렉토리가 생성되었습니다.\n");
+    if (verbose)
+    {
+        printf("'%s' 디렉토리가 생성되었습니다.\n", path);
+    }
 
     return 0;
 }
+
 ```
 
 - mv : ./mv [source] [target]: source를 target으로 이름을 변경함
@@ -514,46 +507,6 @@ int main(int argc, char *argv[]) {
 }
 ```
 
-- ps : ./ps [-a] [-u] [-x] : 현재 실행중인 프로세스 목록과 상태를 보여줌
-  - 각 옵션에 대한 설명
-    - ./ps -a : 모든 프로세스를 출력
-    - ./ps -u : 사용자 친화적인 형식으로 출력
-    - ./ps -x : BSD스타일로 혼자 사용되면 사용자에 의해 소유된 모든 프로세스를 출력, a옵션과 함께 사용하여 모든 프로세스를 출력
-
-```c
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-
-int main(int argc, char *argv[]) {
-    int opt;
-    char cmd[1024];
-
-    sprintf(cmd, "ps");
-
-    while ((opt = getopt(argc, argv, "aux")) != -1) {
-        switch (opt) {
-            case 'a':
-                sprintf(cmd, "%s -a", cmd);
-                break;
-            case 'u':
-                sprintf(cmd, "%s -u", cmd);
-                break;
-            case 'x':
-                sprintf(cmd, "%s -X", cmd);
-                break;
-            default:
-                printf("Usage: %s [-a] [-u] [-x]\n", argv[0]);
-                return 1;
-        }
-    }
-
-    system(cmd);
-
-    return 0;
-}
-```
-
 - pwd : ./pwd : 현재 작업중인 디렉토리 경로를 출력
 
 ```c
@@ -570,6 +523,59 @@ int main() {
         return 1;
     }
 
+    return 0;
+}
+```
+
+- rev : ./rev [file] : 파일을 행 단위로 읽어 각 행의 문자를 역순으로 출력
+
+```c
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+void reverse_string(char *str)
+{
+    size_t len = strlen(str);
+    char temp;
+    for (size_t i = 0; i < len / 2; i++)
+    {
+        temp = str[i];
+        str[i] = str[len - 1 - i];
+        str[len - 1 - i] = temp;
+    }
+}
+
+int main(int argc, char *argv[])
+{
+    char *line = NULL;
+    size_t len = 0;
+    ssize_t read;
+    FILE *file;
+
+    if (argc == 1)
+    {
+        file = stdin;
+    }
+    else
+    {
+        file = fopen(argv[1], "r");
+        if (!file)
+        {
+            perror("fopen");
+            return 1;
+        }
+    }
+
+    // 파일의 각 줄 뒤집기
+    while ((read = getline(&line, &len, file)) != -1)
+    {
+        reverse_string(line);
+        printf("%s", line);
+    }
+
+    fclose(file);
+    free(line);
     return 0;
 }
 ```
@@ -599,26 +605,55 @@ int main(int argc, char *argv[]) {
 ```
 
 - rmdir : ./rmdir [디렉토리] : 디렉토리를 삭제함
+  - 각 옵션에 대한 설명
+    - ./rmdir -v : 실행 과정을 자세하게 보여준다.
 
 ```c
 #include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
 #include <unistd.h>
 
-int main(int argc, char *argv[]) {
-    if (argc != 2) {
-        printf("사용법: %s <디렉토리>\n", argv[0]);
+int main(int argc, char *argv[])
+{
+    int opt;
+    bool verbose = false;
+
+    while ((opt = getopt(argc, argv, "v")) != -1)
+    {
+        switch (opt)
+        {
+        case 'v':
+            verbose = true;
+            break;
+        default:
+            fprintf(stderr, "사용법: %s [-v] <디렉토리>\n", argv[0]);
+            return 1;
+        }
+    }
+
+    if (argc - optind < 1)
+    {
+        fprintf(stderr, "사용법: %s [-v] <디렉토리>\n", argv[0]);
         return 1;
     }
 
-    if (rmdir(argv[1]) == -1) {
-        printf("디렉토리를 삭제할 수 없습니다.\n");
+    char *path = argv[optind];
+
+    if (rmdir(path) == -1)
+    {
+        perror("rmdir");
         return 1;
     }
 
-    printf("디렉토리가 삭제되었습니다.\n");
+    if (verbose)
+    {
+        printf("'%s' 디렉토리가 삭제되었습니다.\n", path);
+    }
 
     return 0;
 }
+
 ```
 
 - sleep : ./sleep [Seconds] : 지정한 시간만큼 프로세스를 일시 중단
