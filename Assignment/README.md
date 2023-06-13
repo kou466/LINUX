@@ -40,7 +40,7 @@ int main(void) {
     printf(" : ");
     print(sub3, 9);
     printf("\n");
-	// 'sub1', 'sub2', 'sub3'를 print 함수를 사용하여 2진수로 변환하고 출력함.
+    // 'sub1', 'sub2', 'sub3'를 print 함수를 사용하여 2진수로 변환하고 출력함.
     
     return 0;
 }
