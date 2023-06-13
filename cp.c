@@ -1,161 +1,146 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <stdbool.h>
-#include <string.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <fcntl.h>
-#include <utime.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <errno.h>
+#include <string.h>
 #include <dirent.h>
 
-void copy_files(const char *src, const char *dst, bool recursive, bool interactive, bool update, bool verbose);
+#define BUF_SIZE 4096
+
+void copy_file(const char *src, const char *dst, int flags[], mode_t mode);
+void copy_directory(const char *src, const char *dst, int flags[], mode_t mode);
+void copy_items(const char* src, const char* dst, int flags[]);
 
 int main(int argc, char *argv[]) {
     int opt;
-    bool archive = false, interactive = false, recursive = false, update = false, verbose = false;
+    int flags[] = {0, 0, 0, 0};  // a, i, r, u, v
 
     while ((opt = getopt(argc, argv, "airuv")) != -1) {
         switch (opt) {
             case 'a':
-                archive = true;
+                flags[0] = 1;
                 break;
             case 'i':
-                interactive = true;
+                flags[1] = 1;
                 break;
             case 'r':
-                recursive = true;
+                flags[2] = 1;
                 break;
             case 'u':
-                update = true;
+                flags[3] = 1;
                 break;
             case 'v':
-                verbose = true;
+                flags[4] = 1;
                 break;
             default:
-                printf("Usage: %s [-airuv] src dest\n", argv[0]);
-                exit(EXIT_FAILURE);
+                fprintf(stderr, "Usage: %s [-a] [-i] [-r] [-u] [-v] source target\n", argv[0]);
+                return 1;
         }
     }
 
-    if (argc - optind != 2) {
-        printf("Usage: %s [-airuv] src dest\n", argv[0]);
-        exit(EXIT_FAILURE);
+    if (optind + 2 != argc) {
+        fprintf(stderr, "Missing source and/or target arguments.\n");
+        return 1;
     }
 
-    char *src_path = argv[optind];
-    char *dst_path = argv[optind + 1];
-    copy_files(src_path, dst_path, recursive, interactive, update, verbose);
+    copy_items(argv[optind], argv[optind + 1], flags);
 
     return 0;
 }
 
-void copy_files(const char *src, const char *dst, bool recursive, bool interactive, bool update, bool verbose) {
-    struct stat src_stat, dst_stat;
-    int cp_flag = 0;
+void copy_items(const char* src, const char* dst, int flags[]) {
+    struct stat src_stat;
 
-    if (lstat(src, &src_stat) == -1) {
-        perror("lstat");
-        exit(EXIT_FAILURE);
+    if (stat(src, &src_stat) == -1) {
+        perror("stat");
+        return;
     }
 
-    // Check if the source is a directory and if a recursive copy should be performed
-    if (S_ISDIR(src_stat.st_mode)) {
-        if (!recursive) {
-            printf("cp: omitting directory '%s'\n", src);
-            return;
-        }
-
-        // Copy the directory and its contents
-        DIR *src_dir = opendir(src);
-        if (src_dir == NULL) {
-            perror("opendir");
-            exit(EXIT_FAILURE);
-        }
-
-        if (mkdir(dst, src_stat.st_mode) == -1) {
-            perror("mkdir");
-            exit(EXIT_FAILURE);
-        }
-
-        struct dirent *entry;
-        while ((entry = readdir(src_dir)) != NULL) {
-            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-                continue;
-            }
-
-            char src_entry_path[PATH_MAX];
-            snprintf(src_entry_path, PATH_MAX, "%s/%s", src, entry->d_name);
-            char dst_entry_path[PATH_MAX];
-            snprintf(dst_entry_path, PATH_MAX, "%s/%s", dst, entry->d_name);
-
-            copy_files(src_entry_path, dst_entry_path, recursive, interactive, update, verbose);
-        }
-
-        closedir(src_dir);
+    if (S_ISDIR(src_stat.st_mode) && flags[2]) {
+        copy_directory(src, dst, flags, src_stat.st_mode);
+    } else if (S_ISREG(src_stat.st_mode)) {
+        copy_file(src, dst, flags, src_stat.st_mode);
     } else {
-        // Check if the destination exists or should be updated
-        cp_flag = 1;
-        if (lstat(dst, &dst_stat) != -1) {
-            if (update && src_stat.st_mtime <= dst_stat.st_mtime) {
-                cp_flag = 0;
-            }
-
-            if (interactive) {
-                cp_flag = 0;
-                printf("cp: overwrite '%s'? ", dst);
-                char response[3];
-                if (fgets(response, sizeof(response), stdin) != NULL) {
-                    if (response[0] == 'y' || response[0] == 'Y') {
-                        cp_flag = 1;
-                    }
-                }
-            }
-        }
-
-        // Copy the file
-        if (cp_flag) {
-            int src_fd = open(src, O_RDONLY);
-            if (src_fd == -1) {
-                perror("open");
-                exit(EXIT_FAILURE);
-            }
-
-            int dst_fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, src_stat.st_mode);
-            if (dst_fd == -1) {
-                perror("open");
-                exit(EXIT_FAILURE);
-            }
-
-            char buf[BUFSIZ];
-            ssize_t n;
-
-            while ((n = read(src_fd, buf, sizeof(buf))) != 0) {
-                if (n == -1) {
-                    perror("read");
-                    exit(EXIT_FAILURE);
-                }
-
-                if (write(dst_fd, buf, n) == -1) {
-                    perror("write");
-                    exit(EXIT_FAILURE);
-                }
-            }
-
-            if (close(src_fd) == -1) {
-                perror("close");
-                exit(EXIT_FAILURE);
-            }
-
-            if (close(dst_fd) == -1) {
-                perror("close");
-                exit(EXIT_FAILURE);
-            }
-
-            if (verbose) {
-                printf("'%s' -> '%s'\n", src, dst);
-            }
-        }
+        fprintf(stderr, "Invalid source path or unsupported file type.\n");
     }
 }
 
+void copy_file(const char *src, const char *dst, int flags[], mode_t mode) {
+    int src_fd, dst_fd;
+    char buffer[BUF_SIZE];
+    struct stat dst_stat;
+
+    src_fd = open(src, O_RDONLY);
+    if (src_fd < 0) {
+        perror("open src");
+        return;
+    }
+
+    // Check options
+    if (flags[3] && access(dst, F_OK) == 0) {
+        if (stat(dst, &dst_stat) == 0) {
+            if (dst_stat.st_mtime >= mode) {
+                return;
+            }
+        }
+    }
+
+    if (flags[1] && access(dst, F_OK) == 0) {
+        char overwrite;
+        printf("overwrite %s? (y/n) ", dst);
+        scanf("%c", &overwrite);
+        if (overwrite != 'y') {
+            return;
+        }
+    }
+
+    dst_fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, mode);
+    if (dst_fd < 0) {
+        perror("open dst");
+        return;
+    }
+
+    ssize_t size;
+    while ((size = read(src_fd, buffer, BUF_SIZE)) > 0) {
+        if (write(dst_fd, buffer, size) != size) {
+            fprintf(stderr, "Error writing to file %s\n", dst);
+            break;
+        }
+    }
+
+    if (size < 0) {
+        fprintf(stderr, "Error reading from file %s\n", src);
+    }
+
+    close(src_fd);
+    close(dst_fd);
+}
+
+void copy_directory(const char *src, const char *dst, int flags[], mode_t mode) {
+    DIR *dir;
+    dir = opendir(src);
+    if (!dir) {
+        perror("opendir");
+        return;
+    }
+
+    if (mkdir(dst, mode) == -1 && errno != EEXIST) {
+        perror("mkdir");
+        return;
+    }
+
+    char src_path[PATH_MAX], dst_path[PATH_MAX];
+    struct dirent *entry;
+    while ((entry = readdir(dir))) {
+        if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
+            snprintf(src_path, sizeof(src_path), "%s/%s", src, entry->d_name);
+            snprintf(dst_path, sizeof(dst_path), "%s/%s", dst, entry->d_name);
+            copy_items(src_path, dst_path, flags);
+        }
+    }
+
+    closedir(dir);
+}

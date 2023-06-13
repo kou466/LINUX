@@ -2,7 +2,7 @@
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
-        printf("사용법: %s <문자열>\n", argv[0]);
+        printf("Usage: %s <문자열>\n", argv[0]);
         return 1;
     }
 
@@ -13,4 +13,3 @@ int main(int argc, char *argv[]) {
 
     return 0;
 }
-
